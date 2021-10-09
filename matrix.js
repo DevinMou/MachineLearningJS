@@ -5,17 +5,17 @@
 function GJ(A) {}
 function LDU(A) {}
 
-function norm(A, n = 2) {
+function norm(A, n = 2, nsqr) {
   let res = null;
   switch (n) {
     case 2:
       const [ra, ca] = getMRC(A);
       if (ra !== null && (ra === 1 || ca === 1)) {
-        res = A.flat().reduce((a, b) => ((a += b ** 2), a), 0) ** 0.5;
+        res = A.flat().reduce((a, b) => ((a += b ** 2), a), 0)
       }
       break;
   }
-  return res;
+  return nsqr ? res : res**0.5;
 }
 
 function getMRC(A) {
@@ -72,6 +72,10 @@ function transpose(A) {
 
 function dot(A, B) {
   return A.reduce((a, b, c) => ((a += b * B[c]), a), 0);
+}
+
+function copy(A, fn) {
+  return A.map((e,i)=>e.map((t,j)=>fn?fn(t,i,j):t))
 }
 
 function MT(A, B) {
@@ -202,10 +206,9 @@ function HH(A) {
     const na = norm(a);
     const b = createMatrix(rx, 1, (r, c) => (r === 0 && c === 0 ? na : 0));
     const t = MPO(a, b, MMath.sub);
-    const w = MPO(t, norm(t), MMath.div);
     const th = MPO(
       createMatrix(rx, rx, (r, c) => (r === c ? 1 : 0)),
-      MPO(2, MT(w, transpose(w)), MMath.time),
+      MPO(MT(t, transpose(t)),2/norm(t,2,true), MMath.time),
       MMath.sub
     );
     const [rh, ch] = getMRC(th);
@@ -293,4 +296,73 @@ function Givens(A) {
     }
     return [transpose(T.Q), transpose(AT)];
   }
+}
+
+function is0 (n) { // equalZero
+  return n < 0 ? n > -1e-12 : n < 1e-12
+}
+
+function ET (A) { // Elementary transformation
+  const [ra, ca] = getMRC(A);
+  if(ra!==null){
+    const CA = copy(A)
+    const min = ra < ca ? ra : ca;
+    const tempA = []
+    for(let i = 0 ; i<min;i++){
+      const ni = CA.findIndex(e => !is0(e))
+      if(ni!==-1){
+        const tr = CA[ni].map(e=>e/CA[ni][i])
+        CA.splice(ni,1)
+        tempA.push(tr)
+        CA.forEach(e=>{
+          const coe = e[i]
+          for(let j=i;j<ca;j++){
+            e[j]-=coe*tr[j]
+            is0(e[j])&&(e[j]=0);
+          }
+        })
+      }
+    }
+    return [...tempA,...CA]
+  }
+  return null
+}
+
+function SOE (E, h) { // solution of equation, h: Homogeneous linear
+  E = copy(E)
+  if(h){
+    E.forEach(e=>e.push(0))
+  }
+  const len = E[0].length
+  const tA = Array(len-1).fill(null)
+  E.forEach(e => {
+    const i = e.findIndex(t=>t===1)
+    if(i>-1){
+      tA[len-2-i] = [e[len-1],e.slice(i+1,-1).reverse().map(t=>-t)]
+    }
+  })
+  const RA = [[]]
+  tA.forEach((e, i)=>{
+    if(e){
+      if(e.length===1&&!RA[0][0].length){
+        RA[0].push(e[0])
+      }else{
+        MT(RA,transpose([e[1]])).forEach((a,b)=>RA[b].push(b?a[0]:(a[0]+e[0])))
+      }
+    }else{
+      RA.forEach(a=>a.push(0))
+      RA.push([...Array(i).fill(0),1])
+    }
+  })
+  return RA.map(e => e.reverse())
+}
+
+function vecI(v){ // vector identity
+  const n = norm(v)
+  return n ? v.map(e => e/n) : v
+}
+
+function getFeatVecByval (A, lam) {
+  const HA = copy(A,(e,i,j)=>i===j?(e-lam):e)
+  return SOE(ET(HA),true).slice(1).map(e=>vecI(e))
 }
