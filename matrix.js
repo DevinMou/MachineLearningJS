@@ -44,18 +44,17 @@ function createMatrix(rNum, cNum, fill = null) {
   if (!rNum || !cNum) {
     return null;
   }
-  let M = Array(rNum).fill(1);
-  M = M.map((e, i) =>
-    Array(cNum)
-      .fill(null)
-      .map((t, j) => {
-        if (typeof fill === "function") {
-          return fill(i, j);
-        } else {
-          return fill;
-        }
-      })
-  );
+  const M = Array(rNum).fill(1).map(()=>Array(cNum).fill(1));
+  const isFun = typeof fill === "function"
+  M.forEach((r, i)=>{
+    M[i] = r.map((e, j) => {
+      if (isFun) {
+        return fill(i, j, M);
+      } else {
+        return fill;
+      }
+    })
+  })
   return M;
 }
 
@@ -96,6 +95,9 @@ function MT(A, B) {
 function MPO(A, B, o) {
   const [ra, ca] = getMRC(A);
   const [rb, cb] = getMRC(B);
+  if (typeof o === 'string') {
+    o = MMath[MathSymbol[o]]
+  }
   if (ra !== null && ra === rb && ca === cb) {
     const isVectorA = !Array.isArray(A[0]);
     const isVectorB = !Array.isArray(B[0]);
@@ -127,7 +129,12 @@ function MPO(A, B, o) {
     return null;
   }
 }
-
+const MathSymbol = {
+  '*': 'time',
+  '+': 'add',
+  '/': 'div',
+  '-': 'sub'
+}
 const MMath = {
   time: (a, b) => a * b,
   add: (a, b) => a + b,
@@ -142,16 +149,16 @@ function GS(A) {
     const R = createMatrix(ra, ca, 0);
     const Q = [];
     R[0][0] = norm(AT[0]);
-    Q[0] = MPO(AT[0], R[0][0], MMath.div);
+    Q[0] = MPO(AT[0], R[0][0], '/');
     // const min = ra < ca ? ra : ca;
     for (let j = 1; j < ca; j++) {
       let v = [...AT[j]];
       for (let i = 0; i < j; i++) {
         R[i][j] = MT(transpose(Q[i]), AT[j])[0][0];
-        v = MPO(v, MPO(R[i][j], Q[i], MMath.time), MMath.sub);
+        v = MPO(v, MPO(R[i][j], Q[i], '*'), '-');
       }
       R[j][j] = norm(v);
-      Q[j] = MPO(v, R[j][j], MMath.div);
+      Q[j] = MPO(v, R[j][j], '/');
     }
     return [transpose(Q), R];
   } else {
@@ -169,10 +176,10 @@ function MGS(A) {
     const min = ra < ca ? ra : ca;
     for (let i = 0; i < min; i++) {
       R[i][i] = norm(V[i]);
-      Q[i] = MPO(V[i], R[i][i], MMath.div);
+      Q[i] = MPO(V[i], R[i][i], '/');
       for (let j = i + 1; j < ca; j++) {
         R[i][j] = MT(transpose(Q[i]), V[j])[0][0];
-        V[j] = MPO(V[j], MPO(R[i][j], Q[i], MMath.time), MMath.sub);
+        V[j] = MPO(V[j], MPO(R[i][j], Q[i], '*'), '-');
       }
     }
     return [transpose(Q), R];
@@ -232,12 +239,12 @@ function Hh(v) {
     return [[nv,0],[[s,c],[c,-s]]]
   }
   const w = createMatrix(len,1,(r,c)=>r===0&&c===0?nv:0)
-  const t = MPO(v,w, MMath.sub)
-  const P = MPO(createMatrix(len,len,(r,c)=>r===c?1:0),MPO(MT(t,transpose(t)),2/norm(t,2,true),MMath.time),MMath.sub)
+  const t = MPO(v,w, '-')
+  const P = MPO(createMatrix(len,len,(r,c)=>r===c?1:0),MPO(MT(t,transpose(t)),2/norm(t,2,true),'*'),'-')
   return [w, P]
 }
 
-function HR(A) { // Hessenburg Reduction
+function HR(A, getQ) { // Hessenburg Reduction
   const [ra, ca] = getMRC(A)
   let TA = copy(A)
   let P = null
@@ -245,7 +252,9 @@ function HR(A) { // Hessenburg Reduction
     const v = TA.slice(1+i-ca).map(e=>e[i])
     const [w,p] = Hh(v)
     const tP = createMatrix(ra,ca,(r,c)=>r>i&&c>i?(p[r-1-i][c-1-i]):r===c?1:0)
-    P = P ? MT(P,tP) : tP
+    if (getQ) {
+      P = P ? MT(P,tP) : tP
+    } 
     const tp = transpose(p)
     const X0 = splitM(TA,[0,i+1],[0,i+1])
     const X1 = MT(p,splitM(TA,[i+1],[0,i+1]))
@@ -286,6 +295,11 @@ function HH(A) {
     AA = MT(h, AA);
   }
   return [H, AA];
+}
+
+function givens(x, y) {
+  const z = Math.sqrt(Math.pow(x, 2) + Math.pow(y, 2))
+  return z ? [x / z, y / z] : []
 }
 
 function Givens(A) {
@@ -470,7 +484,7 @@ function ws (A, n=1) {
   while(n--){
     const s = H[ra][ra] + H[ra-1][ra-1]
     const t = H[ra][ra]*H[ra-1][ra-1] - H[ra][ra-1]*H[ra-1][ra]
-    const M = MPO(MPO(MT(H,H),MPO(s,H,MMath.time),MMath.sub),createMatrix(ra+1,ra+1,(r,c)=>r===c?t:0),MMath.add)
+    const M = MPO(MPO(MT(H,H),MPO(s,H,'*'),'-'),createMatrix(ra+1,ra+1,(r,c)=>r===c?t:0),'+')
     const [Q,R] = Givens(M)
     H = MT(MT(transpose(Q),H),Q)
   }
@@ -487,7 +501,7 @@ function fs (A, n=1) {
     const y = H[1][0]*(H[0][0]+H[1][1]-s)
     const z = H[1][0]*H[2][1]
     const p = Hh([x,y,z].concat(Array(ra-2).fill(0)))[1]
-    const P = HR(MT(MT(transpose(p),H),p))[0]
+    const P = HR(MT(MT(transpose(p),H),p), true)[0]
     const Q = MT(p,P)
     H = MT(MT(transpose(Q),H),Q)
   }
@@ -546,6 +560,201 @@ function sfs (A, tol=1) {
       q = p - 1
     }
   }
-  console.log(log)
-  return Hb
+  console.log(tol)
+  return [Hb, Hb.map((e,i)=>e[i])]
 }
+
+function stqr (oA, tol = 1) {
+  const A = HR(oA)[1]
+  const n = getMRC(A)[0]
+  let m = n
+  const e = 1e-15
+  const Q = createMatrix(n, n, (r,c) => r===c ? 1 : 0)
+  const a = (i, v) => v === undefined ? A[i-1][i-1] : (A[i-1][i-1] = v, true)
+  const b = (i, v) => v === undefined ? A[i-1][i-2] : (A[i-1][i-2] = v, A[i-2][i-1] = v, true)
+  let d,s,x,y,gc,gs,w,z
+  while(tol-- && m > 1) {
+    d = (a(m-1) - a(m)) / 2
+    if (d === 0) {
+      s = a(m) - Math.abs(b(m))
+    } else {
+      const b2 = Math.pow(b(m),2)
+      s = a(m) - b2 / (d + Math.sign(d)*Math.sqrt(b2+Math.pow(d,2)))
+    }
+    x = a(1) - s
+    y = b(2)
+    for(let k = 1; k <= m - 1; k++){
+      if (m > 2) {
+        [gc, gs] = givens(x, y)
+      } else {
+        const t = Math.pow((a(1) - a(2)) / b(2), 2)
+        const c2 = (4 + t - Math.sqrt(t*(t+4))) / 2
+        gc = Math.sqrt(c2)
+        gs = Math.sqrt(1 - c2)
+      }
+      w = gc*x - gs*y
+      d = a(k) - a(k+1)
+      z = (2*gc*b(k+1) + d*gs)*gs
+      a(k, a(k) - z)
+      a(k + 1, a(k + 1) + z)
+      b(k + 1, d*gc*gs + (Math.pow(gc, 2) - Math.pow(gs, 2))*b(k + 1))
+      x = b(k + 1)
+      if (k > 1) {
+        b(k, w)
+      }
+      if (k < m - 1) {
+        y = -gs*b(k + 2)
+        b(k + 2, gc*b(k + 2))
+      }
+      replaceM(Q, MT(splitM(Q,[0,n],[k-1,k+1]),[[gc, gs],[-gs,gc]]),[0,n],[k-1,k+1])
+    }
+    const bm = Math.abs(b(m))
+    const am = Math.abs(a(m-1)) + Math.abs(a(m))
+    if (bm < e*am) {
+      m = m - 1
+    }
+  }
+  console.log(tol)
+  return [A, Q]
+}
+function stqrc (oA, tol = 1) {
+  const A = HR(oA)[1]
+  const n = getMRC(A)[0]
+  const Q = createMatrix(n, n, (r,c) => r===c ? 1 : 0)
+  const e = 1e-15
+  let d,s,x,y
+  for(let m=n;m>=2;m--){
+    while(1) {
+      const cs = Array(n-1).fill(0)
+      const ss = Array(n-1).fill(0)
+      d = (A[m-2][m-2] - A[m-1][m-1]) / 2
+      const b2 = Math.pow(A[m-1][m-2],2)
+      s = A[m-1][m-1] - Math.sign(d) * b2 / (Math.abs(d) + Math.sqrt(b2+Math.pow(d,2)))
+      for(let i=0; i < m; i++){
+        A[i][i] -=s
+      }
+      for(let i=0; i < m-1; i++){
+        x = A[i][i]
+        y = A[i+1][i]
+        const [_c, _s] = givens(x, y)
+        cs[i] = _c
+        ss[i] = _s
+        for(let j=i;j<i+2 && j<m;j++){
+          x = A[i][j]
+          y = A[i+1][j];
+          A[i][j] = cs[i]*x+ss[i]*y
+          A[i+1][j] = -ss[i]*x+cs[i]*y
+        }
+      }
+      for(let j=1;j<m;j++){
+        for(let i=Math.max(0,j-2);i<=j;i++){
+          x=A[i][j-1]
+          y=A[i][j]
+          A[i][j-1]=cs[j-1]*x+ss[j-1]*y
+          A[i][j]=-ss[j-1]*x+cs[j-1]*y
+        }
+      }
+      for(let i=0;i<m;i++){
+        A[i][i]+=s
+      }
+      for(let j=1;j<m;j++){
+        for(let i=0;i<n;i++){
+          x=Q[i][j-1]
+          y=Q[i][j]
+          Q[i][j-1]=cs[j-1]*x+ss[j-1]*y
+          Q[i][j]=-ss[j-1]*x+cs[j-1]*y
+        }
+      }
+      const bm = Math.abs(A[m-1][m-2])
+      const am = Math.abs(A[m-2][m-2]) + Math.abs(A[m-1][m-1])
+      if((bm < e*am)){
+        break
+      }
+    }
+  }
+  console.log(tol)
+  return [A, Q]
+}
+
+function deflation(A) {
+  const tempT = []
+  const tempI = []
+  const tempR = []
+  const len = A.length
+  for(let i = 0; i < len-1;i++){
+    if (is0(A[i+1][i])) {
+      tempT.push(A[i][i])
+      tempI.push(i)
+    } else {
+      tempR.push(i)
+    }
+  }
+  return [tempR.map(i => tempR.map(j => A[i][j])), tempT, tempI]
+}
+
+function strMM(A, B, toStr) {
+  const splStr = (str) => {
+    const m = str.match(/(?:\+|-)?\w+(?:\*(?:\+|-)?\w+)*/g)
+    if (m && m.length) {
+      return m.map(e => {
+        let s = true
+        let n = 1
+        const res = e.split('*').map(t => {
+          const m$ = /^(\+|-)?(\w+)/.exec(t)
+          s = m$[1] === '-' ? !s : s
+          if (/^\d+$/.test(m$[2])){
+            n*=m$[2]
+            return null
+          } else {
+            return m$[2]
+          }
+        }).filter(t => t!==null)
+        return [s ? n : -n, res]
+      })
+    } else {
+      return null
+    }
+  }
+  const mul = (a,r,b,c) => {
+    const lr = a[r]
+    const rr = b.map((e)=>e[c])
+    const res = lr.map((a,i)=>{
+      const b = rr[i]
+      return a.map(([na,resa])=>{
+        return b.map(([nb,resb])=>{
+          const arr = [...resa,...resb].sort()
+          if (arr.find(e=>/^0+$/.test(e)) || na*nb===0){
+            return 0
+          } else {
+            return [na*nb,arr]
+          }
+        })
+      })
+    }).flat(2).filter(e => e)
+    const dist = {}
+    const arr = []
+    res.forEach((e,i)=>{
+      const k = e[1].join('*')
+      dist[k] = dist[k] || []
+      !dist[k].length && arr.push(k)
+      dist[k].push(i)
+    })
+    return arr.map(k => {
+      return [dist[k].reduce((a,b)=>(a+=res[b][0],a),0),res[dist[k][0]][1]]
+    })
+  }
+  const PA = A.map(e => e.map(t => splStr(t)))
+  const PB = B.map(e => e.map(t => splStr(t)))
+  const C = createMatrix(getMRC(A)[0],getMRC(B)[1],(r,c)=>{
+    const res = mul(PA,r,PB,c)
+    if (toStr) {
+      return res.map((e,i)=>{
+        const abs = Math.abs(e[0])
+        return `${e[0]>0?'+':'-'}${abs===1?'':(abs+(e[1].length?'*':''))}${e[1].join('*')}`
+      }).join('').replace(/^\+/,'') || '0'
+    } else {
+      return res
+    }
+  })
+  return C
+} 
